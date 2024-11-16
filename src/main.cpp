@@ -4,9 +4,17 @@
 
 #define Log(Format, ...) DbgPrintEx(0, 0, Format, __VA_ARGS__)
 
-typedef void(*PnpCallDriverEntryFn)();
+PVOID original;
 
-NTSTATUS DriverEntry(PDRIVER_OBJECT, PUNICODE_STRING) {
+NTSTATUS NTAPI PnpCallDriverEntryDetour(IN PDRIVER_OBJECT DriverObject, IN PUNICODE_STRING RegistryPath) {
+    Log("Registry path: %ws\n", RegistryPath->Buffer);
+
+    NTSTATUS status = reinterpret_cast<decltype(&PnpCallDriverEntryDetour)>(original)(DriverObject, RegistryPath);
+
+    return status;
+}
+
+NTSTATUS DriverEntry(IN PDRIVER_OBJECT, IN PUNICODE_STRING) {
     NTSTATUS status = STATUS_SUCCESS;
 
     PVOID base = nullptr;
@@ -28,6 +36,10 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT, PUNICODE_STRING) {
     }
 
     Log("PnpCallDriverEntry: %p\n", pnpCallDriverEntryAddress);
+    if (!CaveHook(reinterpret_cast<ULONGLONG>(pnpCallDriverEntryAddress), PnpCallDriverEntryDetour, &original)) {
+        Log("Cannot hook PnpCallDriverEntry: 0x%lX\n", CaveLastError());
+        return STATUS_NOT_FOUND;
+    }
 
     return status;
 }
