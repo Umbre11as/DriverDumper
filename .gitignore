@@ -1,0 +1,8 @@
+# CLion files
+.idea
+
+# CMake files
+BuildCache
+
+# Deploy files
+dist
