@@ -22,10 +22,11 @@ NTSTATUS GetSystemModule(IN PCSTR Path, OUT PVOID* Base, OUT SIZE_T* Size) {
 
     for (ULONG i = 0; i < processModules->NumberOfModules; i++) {
         const RTL_PROCESS_MODULE_INFORMATION moduleInformation = processModules->Modules[i];
-        if (strcmp(moduleInformation.FullPathName + moduleInformation.OffsetToFileName, Path) == 0) {
-            *Base = moduleInformation.ImageBase;
-            *Size = moduleInformation.ImageSize;
+        DbgPrintEx(0, 0, "%s\n", moduleInformation.FullPathName + moduleInformation.OffsetToFileName);
+        *Base = moduleInformation.ImageBase;
+        *Size = moduleInformation.ImageSize;
 
+        if (strcmp(moduleInformation.FullPathName + moduleInformation.OffsetToFileName, Path) == 0) {
             status = STATUS_SUCCESS;
             break;
         }

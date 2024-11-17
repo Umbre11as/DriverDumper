@@ -1,15 +1,73 @@
 // ReSharper disable CppLocalVariableMayBeConst
 #include "utils.h"
 #include <CaveHook.h>
+#include <ntimage.h>
 
 #define Log(Format, ...) DbgPrintEx(0, 0, Format, __VA_ARGS__)
+
+bool ReadMdl(IN PVOID Address, IN PVOID Buffer, IN SIZE_T Size) {
+    PMDL mdl = IoAllocateMdl(Address, Size, false, false, nullptr);
+    if (!mdl)
+        return false;
+
+    __try {
+        MmProbeAndLockPages(mdl, KernelMode, IoReadAccess);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+
+    PVOID mappedAddress = MmMapLockedPagesSpecifyCache(mdl, KernelMode, MmNonCached, nullptr, false, NormalPagePriority);
+    if (!mappedAddress)
+        return false;
+
+    if (!NT_SUCCESS(MmProtectMdlSystemAddress(mdl, PAGE_READWRITE)))
+        return false;
+
+    memcpy(Buffer, Address, Size);
+
+    MmUnmapLockedPages(mappedAddress, mdl);
+    MmUnlockPages(mdl);
+    IoFreeMdl(mdl);
+    return true;
+}
 
 PVOID original;
 
 NTSTATUS NTAPI PnpCallDriverEntryDetour(IN PDRIVER_OBJECT DriverObject, IN PUNICODE_STRING RegistryPath) {
-    Log("Registry path: %ws\n", RegistryPath->Buffer);
+    if (RegistryPath && RegistryPath->Buffer)
+        Log("Registry path: %ws\n", RegistryPath->Buffer);
+
+    PVOID base = nullptr;
+    SIZE_T size = 0;
+    GetSystemModule("EasyAntiCheat_EOS.sys", &base, &size); // Лень писать передачу из usermode
+    if (!base) {
+        Log("Not found\n");
+        return reinterpret_cast<decltype(&PnpCallDriverEntryDetour)>(original)(DriverObject, RegistryPath);
+    }
+
+    auto dosHeader = static_cast<PIMAGE_DOS_HEADER>(base);
+    auto ntHeaders = reinterpret_cast<PIMAGE_NT_HEADERS>(dosHeader + dosHeader->e_lfanew);
+    SIZE_T sizeOfImage = ntHeaders->OptionalHeader.SizeOfImage;
 
     NTSTATUS status = reinterpret_cast<decltype(&PnpCallDriverEntryDetour)>(original)(DriverObject, RegistryPath);
+
+    // ReSharper disable CppDeprecatedEntity
+    auto buffer = static_cast<UCHAR*>(ExAllocatePool(NonPagedPool, sizeOfImage));
+    // ReSharper restore CppDeprecatedEntity
+    ReadMdl(base, buffer, sizeOfImage);
+
+    UNICODE_STRING filePath;
+    RtlInitUnicodeString(&filePath, L"\\DosDevices\\C:\\dumped.sys");
+
+    HANDLE fileHandle;
+    OBJECT_ATTRIBUTES objectAttributes;
+    IO_STATUS_BLOCK ioStatusBlock;
+
+    InitializeObjectAttributes(&objectAttributes, &filePath, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, nullptr, nullptr);
+
+    ZwCreateFile(&fileHandle, FILE_GENERIC_READ | FILE_GENERIC_WRITE, &objectAttributes, &ioStatusBlock, nullptr, FILE_ATTRIBUTE_NORMAL, 0, FILE_CREATE, FILE_SYNCHRONOUS_IO_NONALERT, nullptr, 0);
+    ZwWriteFile(fileHandle, nullptr, nullptr, nullptr, &ioStatusBlock, buffer, sizeOfImage, nullptr, nullptr);
+    ZwClose(fileHandle);
 
     return status;
 }
